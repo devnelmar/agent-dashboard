@@ -189,7 +189,6 @@ function App() {
   return (
     <>
       <div className="backdrop" />
-      <div className={`sidebar-scrim ${sidebarOpen ? "show" : ""}`} onClick={() => setSidebarOpen(false)} />
       <div className={`app ${density === "compact" ? "is-compact" : ""}`}>
         <Sidebar
           open={sidebarOpen}
@@ -202,6 +201,7 @@ function App() {
           theme={theme} setTheme={setTheme}
           connected={connected}
         />
+        <div className={`sidebar-scrim ${sidebarOpen ? "show" : ""}`} onClick={() => setSidebarOpen(false)} />
         <Main
           agent={active}
           onSend={sendMessage}
@@ -310,6 +310,23 @@ function Main({ agent, onSend, onInterrupt, onClear, drawerOpen, setDrawerOpen, 
     convoRef.current.scrollTop = convoRef.current.scrollHeight;
   }, [agent?.id, agent?.messages?.length, agent?.status]);
 
+  // When the tool drawer toggles, the convo's flex height changes mid-animation.
+  // If the user was anchored near the bottom, keep them anchored as the drawer slides.
+  useEffect(() => {
+    const el = convoRef.current;
+    if (!el) return;
+    const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (!wasNearBottom) return;
+    let raf = 0;
+    const tick = () => {
+      el.scrollTop = el.scrollHeight;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const stop = setTimeout(() => cancelAnimationFrame(raf), 380);
+    return () => { cancelAnimationFrame(raf); clearTimeout(stop); };
+  }, [drawerOpen]);
+
   function autoGrow(e) {
     e.target.style.height = "auto";
     e.target.style.height = Math.min(160, e.target.scrollHeight) + "px";
@@ -342,8 +359,6 @@ function Main({ agent, onSend, onInterrupt, onClear, drawerOpen, setDrawerOpen, 
     });
     return out;
   }, [agent?.messages]);
-
-  const usedTools = agent ? agent.messages.filter((m) => m.role === "tool") : [];
 
   if (!agent) {
     return (
@@ -430,7 +445,7 @@ function Main({ agent, onSend, onInterrupt, onClear, drawerOpen, setDrawerOpen, 
         )}
       </div>
 
-      <ToolDrawer open={drawerOpen} setOpen={setDrawerOpen} agent={agent} usedTools={usedTools} />
+      <ToolDrawer open={drawerOpen} setOpen={setDrawerOpen} agent={agent} />
 
       <div className="composer-wrap">
         <div className="composer">
@@ -505,36 +520,28 @@ function renderMarkdown(s) {
 }
 
 /* ===================== Tool Drawer ===================== */
-function ToolDrawer({ open, setOpen, agent, usedTools }) {
-  const [backendCalls, setBackendCalls] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function poll() {
-      try {
-        const res = await fetch("/api/status");
-        if (!res.ok) throw new Error("bad status");
-        const data = await res.json();
-        if (cancelled) return;
-        const a = data[agent.id];
-        if (!a) { setBackendCalls([]); return; }
-        const calls = [];
-        for (const m of a.messages || []) {
-          if (m.role === "tool") {
-            calls.push({ tool: m.tool, name: m.name, args: m.args, output: m.output, t: m.t });
-          }
-        }
-        calls.reverse();
-        setBackendCalls(calls);
-      } catch (_) { /* ignore */ }
+// Tool calls share a timestamp per agent turn (the parser sees a whole turn at
+// once and stamps it with the time of first observation). Showing a separate
+// "X minutes ago" per row would be misleading — every row in the same turn
+// would show the same value. Group by turn instead and show one time label.
+function ToolDrawer({ open, setOpen, agent }) {
+  const { groups, totalCalls, uniqueCount } = useMemo(() => {
+    if (!agent) return { groups: [], totalCalls: 0, uniqueCount: 0 };
+    const tools = agent.messages.filter((m) => m.role === "tool");
+    const groups = [];
+    for (const t of tools) {
+      const last = groups[groups.length - 1];
+      if (last && Math.abs(t.t - last.t) < 5000) {
+        last.tools.push(t);
+      } else {
+        groups.push({ t: t.t, tools: [t] });
+      }
     }
-    poll();
-    const id = setInterval(poll, 4000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [agent.id]);
-
-  const live = backendCalls !== null;
-  const rows = live ? backendCalls : null;
+    groups.reverse();  // newest first
+    const names = new Set();
+    for (const g of groups) for (const t of g.tools) if (t.name) names.add(t.name);
+    return { groups, totalCalls: tools.length, uniqueCount: names.size };
+  }, [agent?.messages]);
 
   return (
     <div className={`tool-drawer ${open ? "expanded" : "collapsed"}`}>
@@ -542,36 +549,35 @@ function ToolDrawer({ open, setOpen, agent, usedTools }) {
         <Tool size={12} />
         <span>Tool Output</span>
         <span className="tool-drawer-count">
-          {live
-            ? `${rows.length} usadas`
-            : `${agent.toolsAvailable.length} disponibles · ${usedTools.length} usadas`}
+          {totalCalls === 0
+            ? "sin uso"
+            : `${totalCalls} ${totalCalls === 1 ? "llamada" : "llamadas"} · ${uniqueCount} ${uniqueCount === 1 ? "tool" : "tools"}`}
         </span>
         <ChevDown size={14} className="chev" />
       </div>
       <div className="tool-drawer-body">
-        {live ? (
-          rows.length === 0 ? (
-            <div className="tool-empty">sin herramientas usadas</div>
-          ) : rows.map((c, i) => (
-            <div className="tool-row" key={`${c.t}-${i}`}>
-              <span className="ico">{c.tool || "▸"}</span>
-              <span className="nm">{c.name || ""}</span>
-              <span className="desc">{c.args || ""}</span>
-              <span className="ms">{c.t ? fmtRel(c.t) : ""}</span>
+        {totalCalls === 0 ? (
+          <div className="tool-empty">aún no se han usado herramientas</div>
+        ) : groups.map((g) => (
+          <div className="tool-group" key={g.t}>
+            <div className="tool-group-head">
+              <span className="tool-group-time">{fmtTime(g.t)}</span>
+              <span className="tool-group-rel">{fmtRel(g.t)}</span>
+              <span className="tool-group-count">
+                {g.tools.length} {g.tools.length === 1 ? "llamada" : "llamadas"}
+              </span>
             </div>
-          ))
-        ) : (
-          agent.toolsAvailable.length === 0 ? (
-            <div className="tool-empty">sin herramientas</div>
-          ) : agent.toolsAvailable.map((t) => (
-            <div className="tool-row" key={t.name}>
-              <span className="ico">▸</span>
-              <span className="nm">{t.name}</span>
-              <span className="desc">{t.desc}</span>
-              <span className="ms">{t.lastUsed}</span>
+            <div className="tool-group-rows">
+              {g.tools.map((c, ti) => (
+                <div className="tool-row" key={`${g.t}-${ti}`}>
+                  <span className="ico">{c.tool || "▸"}</span>
+                  <span className="nm">{c.name || "—"}</span>
+                  <span className="desc" title={c.args || ""}>{c.args || ""}</span>
+                </div>
+              ))}
             </div>
-          ))
-        )}
+          </div>
+        ))}
       </div>
     </div>
   );

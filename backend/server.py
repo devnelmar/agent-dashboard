@@ -296,6 +296,37 @@ def _get_model(profile: str) -> str:
 
 # ─── Status aggregation ───────────────────────────────────────────────────────
 
+def _parse_tokens(lines: list) -> int:
+    """Extract token count from the Hermes status bar in tmux capture.
+    Status bar format: ⚕ model │ 16.6K/1M │ [░░] 2% │ time │ ⏲ Ns
+    When no data yet:  ⚕ model │ ctx -- │ [░░] -- │ time │ ⏲ Ns
+    """
+    for line in reversed(lines):
+        if "⚕" not in line:
+            continue
+        # Must be a status bar (has pipe separators and timing)
+        if not any(x in line for x in ("⏲", "⏱", "░", "K/", "M/", "ctx")):
+            continue
+        parts = line.split("│")
+        if len(parts) < 2:
+            continue
+        token_part = parts[1].strip()  # e.g. "16.6K/1M" or "ctx --"
+        if "/" not in token_part:
+            continue
+        used = token_part.split("/")[0].strip()  # "16.6K" or "0"
+        if not used:
+            return 0
+        try:
+            if used.endswith("K"):
+                return int(float(used[:-1]) * 1000)
+            elif used.endswith("M"):
+                return int(float(used[:-1]) * 1_000_000)
+            else:
+                return int(used)
+        except (ValueError, IndexError):
+            return 0
+    return 0
+
 
 def _map_status(backend_status: str) -> str:
     """Map backend status to frontend status."""
@@ -355,7 +386,7 @@ def get_status() -> dict:
             "status": _map_status("busy" if busy else "idle"),
             "model": _get_model(agent["profile"]),
             "tags": [agent.get("project", "").lower()],
-            "tokens": 0,
+            "tokens": _parse_tokens(lines),
             "cost": 0,
             "lastActive": int(time.time() * 1000),
             "unread": 0,
