@@ -33,7 +33,7 @@ AGENTS = {
     "gitbonsai": {
         "name": "GitBonsai",
         "session": "gitbonsai-agent",
-        "emoji": "🍎",
+        "emoji": "🌱",
         "profile": "gitbonsai",
         "project": "GitBonsai",
     },
@@ -47,7 +47,7 @@ AGENTS = {
     "megan": {
         "name": "Megan",
         "session": "megan-agent",
-        "emoji": "🔍",
+        "emoji": "👩",
         "profile": "megan",
         "project": "JobHunter",
     },

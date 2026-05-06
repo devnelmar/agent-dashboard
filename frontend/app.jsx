@@ -407,8 +407,13 @@ function Main({ agent, onSend, onInterrupt, onClear, drawerOpen, setDrawerOpen, 
           </span>
         </div>
         <div className="main-head-actions">
-          <button className="icon-btn" title="Interrumpir" onClick={onInterrupt}
-            style={{ opacity: agent?.status === "thinking" ? 1 : 0.4 }}>
+          <button className="icon-btn" onClick={onInterrupt}
+            disabled={agent?.status !== "thinking"}
+            title={agent?.status === "thinking"
+              ? "Interrumpir (envía Ctrl+C)"
+              : "El agente está idle — interrumpir podría dejarlo en un estado raro"}
+            style={{ opacity: agent?.status === "thinking" ? 1 : 0.35,
+                     cursor: agent?.status === "thinking" ? "pointer" : "not-allowed" }}>
             <Stop size={15} />
           </button>
           <button className="icon-btn" title="Borrar conversación" onClick={onClear}><Trash size={15} /></button>
